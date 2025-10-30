@@ -1,5 +1,9 @@
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route, Mount
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 import mcp.types as types
 import asyncio
 import signal
@@ -24,6 +28,31 @@ conn = psycopg2.connect(**DB_CONFIG_COLUMNAR)
 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 cur = conn.cursor()
 
+# Create MCP Server app
+app = Server("ambient-sensors-server")
+
+sse = SseServerTransport("/messages/")
+
+async def handle_sse(request: Request):
+    async with sse.connect_sse(
+        request.scope, 
+        request.receive, 
+        request._send
+    ) as streams:
+        await app.run(
+            streams[0], 
+            streams[1], 
+            app.create_initialization_options()
+        )
+    return Response()
+
+starlette_app = Starlette(
+    routes=[
+        Route("/sse", endpoint=handle_sse, methods=["GET"]),
+        Mount("/messages/", app=sse.handle_post_message),
+    ]
+)
+
 def create_sensor_dict(results, description):
     sensor_dict = {}
     for row in results:
@@ -39,8 +68,6 @@ def list_sensors() -> dict:
     resp_dict = create_sensor_dict(results, description)
     return resp_dict
 
-
-app = Server("sensor-data-server")
 
 @app.list_tools()
 async def list_tools() -> list[types.Tool]:
@@ -71,26 +98,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 
-async def main():
-    # Database connections (your existing code)
-    global conn, cur
-    
-    try:
-        # Run the MCP server with stdio transport
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options()
-            )
-    finally:
-        # Cleanup connections
-        cur.close()
-        conn.close()
-        print("Database connection closed")
-
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nShutting down gracefully...")
+    import uvicorn
+    uvicorn.run(
+        starlette_app, 
+        host="0.0.0.0", 
+        port=8000,
+        ssl_keyfile="/etc/letsencrypt/live/thestitchpatterns.store/privkey.pem",
+        ssl_certfile="/etc/letsencrypt/live/thestitchpatterns.store/fullchain.pem"
+    )
