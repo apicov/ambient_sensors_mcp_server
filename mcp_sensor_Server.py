@@ -6,6 +6,7 @@ from starlette.routing import Route, Mount
 from mcp.server import Server
 import mcp.types as types
 import asyncio
+import uvicorn
 import signal
 import sys
 import os
@@ -96,14 +97,32 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     
     raise ValueError(f"Unknown tool: {name}")
 
-
-
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        starlette_app, 
-        host="0.0.0.0", 
-        port=8000,
-        ssl_keyfile="/etc/letsencrypt/live/thestitchpatterns.store/privkey.pem",
-        ssl_certfile="/etc/letsencrypt/live/thestitchpatterns.store/fullchain.pem"
-    )
+    
+    async def run_servers():
+        # HTTPS server config
+        https_config = uvicorn.Config(
+            starlette_app,
+            host="0.0.0.0",
+            port=8000,
+            ssl_keyfile="/etc/letsencrypt/live/thestitchpatterns.store/privkey.pem",
+            ssl_certfile="/etc/letsencrypt/live/thestitchpatterns.store/fullchain.pem"
+        )
+        
+        # HTTP server config
+        http_config = uvicorn.Config(
+            starlette_app,
+            host="0.0.0.0",
+            port=8001
+        )
+        
+        https_server = uvicorn.Server(https_config)
+        http_server = uvicorn.Server(http_config)
+        
+        # Run both servers concurrently
+        await asyncio.gather(
+            https_server.serve(),
+            http_server.serve()
+        )
+    
+    asyncio.run(run_servers())
