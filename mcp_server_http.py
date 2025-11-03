@@ -69,7 +69,7 @@ def create_sensor_dict(results, description):
         sensor_dict[sensor_id] = sensor_info
     return sensor_dict
 
-@mcp.tool()
+@mcp.tool(description="Clear cached query results. Provide query_id to clear a specific query, or omit to clear all cached queries.")
 def clear_query_cache(query_id: str = None) -> str:
     if query_id:
         if query_id in query_cache:
@@ -80,9 +80,8 @@ def clear_query_cache(query_id: str = None) -> str:
         query_cache.clear()
         return "Cleared all cached queries"
 
-@mcp.tool()
+@mcp.tool(description="Execute a read-only SQL SELECT query against the ambient sensors database. Returns a query_id for caching, along with metadata (row count, columns, data types) and a preview of the first 5 rows. Use this query_id with execute_pandas to analyze the results.")
 def execute_sql_query(sql: str) -> dict:
-    """Execute SQL query and cache the DataFrame"""
     
     # Validate query is safe
     if not is_safe_query(sql):
@@ -113,18 +112,16 @@ def execute_sql_query(sql: str) -> dict:
     except Exception as e:
         return {"error": f"Query execution failed: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool(description="Get a complete list of all available sensors in the database with their metadata (sensor_id, name, location, type, etc.). Use this to discover which sensors are available before querying sensor data.")
 def list_sensors() -> str:
-    """Get list of available sensors from the database."""
     cur.execute("SELECT * FROM sensors")
     results = cur.fetchall()
     description = [d.name for d in cur.description]
     resp_dict = create_sensor_dict(results, description)
     return str(resp_dict)
 
-@mcp.tool()
+@mcp.tool(description="Get the most recent readings from a specific sensor by sensor_id. Returns up to 'limit' readings (default 10) sorted by timestamp descending. Use list_sensors first to find available sensor_id values.")
 def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
-    """Get recent data from a specific sensor."""
     query = """
         SELECT * FROM sensor_readings
         WHERE sensor_id = %s
@@ -142,9 +139,8 @@ def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
     
     return str(readings)
 
-@mcp.tool()
-""" Run python code with pandas dataframe obtained from sql_query"""
-def execute_pandas(query_id: str, code: str)-> str:
+@mcp.tool(description="Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use. The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.")
+def execute_pandas(query_id: str, code: str) -> str:
     return pandasEx.execute_code(query_id, query_cache, code)
 
 # Export app for uvicorn
