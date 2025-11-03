@@ -3,6 +3,9 @@ import os
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from fastmcp import FastMCP
+import sqlparse
+import uuid
+
 from dotenv import load_dotenv                                                                                                                                                                                                                                                                                                                                                    
 load_dotenv() 
 
@@ -19,6 +22,36 @@ DB_CONFIG_COLUMNAR = {
 conn = psycopg2.connect(**DB_CONFIG_COLUMNAR)
 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 cur = conn.cursor()
+
+# Store query results
+query_cache = {}
+
+def is_safe_query(sql: str) -> bool:
+    """Validate that SQL query is read-only (SELECT only)"""
+    # Forbidden keywords that modify data
+    forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 
+                 'CREATE', 'TRUNCATE', 'REPLACE', 'MERGE']
+
+    # Parse and normalize the SQL
+    parsed = sqlparse.parse(sql)
+    if not parsed:
+        return False
+
+    # Get the first statement
+    statement = parsed[0]
+
+    # Check if it's a SELECT statement
+    if statement.get_type() != 'SELECT':
+        return False
+
+    # Check for forbidden keywords in the entire query
+    sql_upper = sql.upper()
+    for keyword in forbidden:
+        if keyword in sql_upper:
+            return False
+
+    return True
+
 
 # Create FastMCP server
 mcp = FastMCP("ambient-sensors-server")
