@@ -6,6 +6,8 @@ from fastmcp import FastMCP
 import sqlparse
 import uuid
 
+from python_executor import PandasExecutor
+
 from dotenv import load_dotenv                                                                                                                                                                                                                                                                                                                                                    
 load_dotenv() 
 
@@ -25,6 +27,12 @@ cur = conn.cursor()
 
 # Store query results
 query_cache = {}
+
+pandasEx = PandasExecutor()
+
+# Create FastMCP server
+mcp = FastMCP("ambient-sensors-server")
+
 
 def is_safe_query(sql: str) -> bool:
     """Validate that SQL query is read-only (SELECT only)"""
@@ -52,10 +60,6 @@ def is_safe_query(sql: str) -> bool:
 
     return True
 
-
-# Create FastMCP server
-mcp = FastMCP("ambient-sensors-server")
-
 def create_sensor_dict(results, description):
     """Helper function to create sensor dictionary from query results"""
     sensor_dict = {}
@@ -64,6 +68,50 @@ def create_sensor_dict(results, description):
         sensor_info = {description[i]: row[i] for i in range(1, len(description))}
         sensor_dict[sensor_id] = sensor_info
     return sensor_dict
+
+@mcp.tool()
+def clear_query_cache(query_id: str = None) -> str:
+    if query_id:
+        if query_id in query_cache:
+            del query_cache[query_id]
+            return f"Cleared query {query_id}"
+        return f"Query {query_id} not found"
+    else:
+        query_cache.clear()
+        return "Cleared all cached queries"
+
+@mcp.tool()
+def execute_sql_query(sql: str) -> dict:
+    """Execute SQL query and cache the DataFrame"""
+    
+    # Validate query is safe
+    if not is_safe_query(sql):
+        return {
+            "error": "Query contains forbidden operations. Only SELECT queries are allowed."
+        }
+    
+    try:
+        # Execute query with read-only transaction
+        conn.set_session(readonly=True)
+        df = pd.read_sql_query(sql, cur)
+        
+        # Generate unique ID
+        query_id = str(uuid.uuid4())
+        
+        # Cache the DataFrame
+        query_cache[query_id] = df
+        
+        # Return metadata
+        return {
+            "query_id": query_id,
+            "rows": len(df),
+            "columns": list(df.columns),
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "preview": df.head(5).to_dict('records')
+        }
+
+    except Exception as e:
+        return {"error": f"Query execution failed: {str(e)}"}
 
 @mcp.tool()
 def list_sensors() -> str:
@@ -94,6 +142,10 @@ def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
     
     return str(readings)
 
+@mcp.tool()
+""" Run python code with pandas dataframe obtained from sql_query"""
+def execute_pandas(query_id: str, code: str)-> str:
+    return pandasEx.execute_code(query_id, query_cache, code)
 
 # Export app for uvicorn
 app = mcp.http_app()
