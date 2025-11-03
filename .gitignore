@@ -1,1 +1,9 @@
+# Python cache and compiled files (comprehensive)
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+sandbox/
+
 **/.env
