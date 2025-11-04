@@ -74,13 +74,13 @@ import pandas as pd
 import traceback
 
 # Load DataFrame
-with open('/data/dataframe.pkl', 'rb') as f:
+with open('/project/dataframe.pkl', 'rb') as f:
     df = pickle.load(f)
 
 print("DataFrame loaded:", df.shape[0], "rows,", df.shape[1], "columns")
 
 try:
- """ + textwrap.indent(code, '    ') + """
+""" + textwrap.indent(textwrap.dedent(code), '    ') + """
 except Exception as e:
     print("Error:", str(e))
     traceback.print_exc()
@@ -99,7 +99,7 @@ except Exception as e:
                 command="python /app/script.py",
                 volumes={
                     temp_script: {'bind': '/app/script.py', 'mode': 'ro'},
-                    temp_pickle: {'bind': '/data/dataframe.pkl', 'mode': 'ro'},
+                    temp_pickle: {'bind': '/project/dataframe.pkl', 'mode': 'ro'},
                     self.config.python_project_folder: {'bind': '/project', 'mode': 'rw'}
                 },
                 remove=False,

@@ -7,6 +7,10 @@ import sqlparse
 import uuid
 import pandas as pd
 from python_executor import PandasExecutor
+from starlette.staticfiles import StaticFiles
+from starlette.routing import Mount
+from pathlib import Path
+import json
 
 from dotenv import load_dotenv                                                                                                                                                                                                                                                                                                                                                    
 load_dotenv() 
@@ -29,6 +33,8 @@ cur = conn.cursor()
 query_cache = {}
 
 pandasEx = PandasExecutor()
+
+files_path = os.getenv("PYTHON_PROJECT_FOLDER")
 
 # Create FastMCP server
 mcp = FastMCP("ambient-sensors-server")
@@ -69,8 +75,11 @@ def create_sensor_dict(results, description):
         sensor_dict[sensor_id] = sensor_info
     return sensor_dict
 
-@mcp.tool(description="Clear cached query results. Provide query_id to clear a specific query, or omit to clear all cached queries.")
+@mcp.tool()
 def clear_query_cache(query_id: str = None) -> str:
+    '''
+    Clear cached query results. Provide query_id to clear a specific query, or omit to clear all cached queries.
+    '''
     if query_id:
         if query_id in query_cache:
             del query_cache[query_id]
@@ -80,9 +89,13 @@ def clear_query_cache(query_id: str = None) -> str:
         query_cache.clear()
         return "Cleared all cached queries"
 
-@mcp.tool(description="Execute a read-only SQL SELECT query against the ambient sensors database. Returns a query_id for caching, along with metadata (row count, columns, data types) and a preview of the first 5 rows. Use this query_id with execute_pandas to analyze the results. Check the schema://database resource for table structure before writing queries.")
+@mcp.tool()
 def execute_sql_query(sql: str) -> dict:
-    
+    '''
+    Execute a read-only SQL SELECT query against the ambient sensors database. 
+    Returns dictionary with query result if data size is small. 
+    Returns query_id of generated dataframe resource, accessible as df variable through pandas_executor tool (python code) if data size big.
+    '''
     # Validate query is safe
     if not is_safe_query(sql):
         return {
@@ -96,24 +109,44 @@ def execute_sql_query(sql: str) -> dict:
         
         # Generate unique ID
         query_id = str(uuid.uuid4())
-        
-        # Cache the DataFrame
-        query_cache[query_id] = df
-        
-        # Return metadata
-        return {
-            "query_id": query_id,
-            "rows": len(df),
-            "columns": list(df.columns),
-            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-            "preview": df.head(5).to_dict('records')
-        }
 
+        # convert to dict or directly to JSON
+        d = df.to_dict(orient='records')      # Python dict/list structure
+        s_json = json.dumps(d, ensure_ascii=False)  # JSON string
+    
+
+        if len(s_json) < 10000:
+            return {
+                #"csv_download_link":"http://thestitchpatterns.store:8000/files/" + query_id + ".csv",
+                #"query_id": query_id,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "data": s_json
+            }
+        else:
+        # Save result in csv
+        #jdf.to_csv( Path(files_path)/(query_id + ".csv"), index=False)
+            # Cache the DataFrame
+            query_cache[query_id] = df
+            # Return metadata
+            return {
+                #"csv_download_link":"http://thestitchpatterns.store:8000/files/" + query_id + ".csv",
+                "query_id": query_id,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "data": "file too large, access it with the query_id through pandas_executor tool"
+            }
     except Exception as e:
         return {"error": f"Query execution failed: {str(e)}"}
 
-@mcp.tool(description="Get a complete list of all available sensors in the database with their metadata (sensor_id, name, location, type, etc.). Use this to discover which sensors are available before querying sensor data.")
+@mcp.tool()
 def list_sensors() -> str:
+    '''
+    Get a complete list of all available sensors in the database with their metadata (sensor_id, name, location, type, etc.).
+    Use this to discover which sensors are available before querying sensor data.
+    '''
     cur.execute("SELECT * FROM sensors")
     results = cur.fetchall()
     description = [d.name for d in cur.description]
@@ -140,18 +173,25 @@ def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
     return str(readings)
     '''
 
-@mcp.tool(description="Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use. The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.")
+@mcp.tool()
 def execute_pandas(query_id: str, code: str) -> str:
+    '''
+    Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use. 
+    The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.
+    Use print() for retrieving required data.
+    Use base64 encoding to print and retrieve images.
+    '''
     return pandasEx.execute_code(query_id, query_cache, code)
 
-@mcp.resource("schema://database")
+@mcp.tool()
 def get_database_schema() -> str:
-    """Provide database schema information for the sensor database"""
-    
+    '''
+    Provide database schema information for the sensor database. Use it before starting sql queries.
+    '''
     schema_info = []
     
     # Get all tables
-    cur_col.execute("""
+    cur.execute("""
         SELECT table_name 
         FROM information_schema.tables 
         WHERE table_schema = 'public'
@@ -160,7 +200,7 @@ def get_database_schema() -> str:
     
     # For each table, get column details
     for (table_name,) in tables:
-        cur_col.execute("""
+        cur.execute("""
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns 
             WHERE table_name = %s
@@ -178,11 +218,11 @@ def get_database_schema() -> str:
 #@mcp.resource("guide://tools")
 #    def get_tool_guide() -> str:
         
-
-
-
 # Export app for uvicorn
 app = mcp.http_app()
+
+app.routes.append(
+    Mount("/files", StaticFiles(directory=files_path), name="files"))
 
 if __name__ == "__main__":
     import sys
