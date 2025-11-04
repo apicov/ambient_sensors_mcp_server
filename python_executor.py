@@ -154,3 +154,162 @@ except Exception as e:
                 os.unlink(temp_script)
             if temp_pickle and os.path.exists(temp_pickle):
                 os.unlink(temp_pickle)
+
+
+class MatplotlibExecutor:
+    """Execute matplotlib plotting code in a Docker container"""
+    def __init__(self, config: Config = None):
+        if config is None:
+            self.config = Config.from_env()
+        else:
+            self.config = config
+
+    def create_plot(self, query_id: str, query_cache: dict, plot_code: str) -> dict:
+        """Execute matplotlib code to create a plot from cached DataFrame"""
+
+        # Get DataFrame from cache
+        if query_id not in query_cache:
+            return {"error": f"Query ID '{query_id}' not found in cache"}
+
+        df = query_cache[query_id]
+
+        # Validate Docker connection
+        try:
+            client = docker.from_env()
+            client.ping()
+        except Exception as e:
+            return {"error": f"Cannot connect to Docker: {str(e)}"}
+
+        # Validate code
+        if not plot_code or not isinstance(plot_code, str):
+            return {"error": "Code must be a non-empty string"}
+        plot_code = plot_code.strip()
+        if not plot_code:
+            return {"error": "Code cannot be empty after stripping whitespace"}
+
+        temp_script = None
+        temp_pickle = None
+        container = None
+
+        try:
+            import uuid
+
+            # Generate plot UUID
+            plot_id = str(uuid.uuid4())
+            plot_filename = f"{plot_id}.png"
+            plot_path = os.path.join(self.config.python_project_folder, plot_filename)
+
+            # Pickle DataFrame to temp file
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.pkl', delete=False) as f:
+                pickle.dump(df, f)
+                temp_pickle = f.name
+
+            # Prepare script with DataFrame loading and plotting
+            script_content = f"""
+import pickle
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
+import matplotlib.pyplot as plt
+import traceback
+
+# Load DataFrame
+with open('/project/dataframe.pkl', 'rb') as f:
+    df = pickle.load(f)
+
+print("DataFrame loaded:", df.shape[0], "rows,", df.shape[1], "columns")
+
+try:
+    # Create new figure
+    plt.figure(figsize=(10, 6))
+
+    # Execute user's plotting code
+""" + textwrap.indent(textwrap.dedent(plot_code), '    ') + f"""
+
+    # Save plot
+    plt.savefig('/project/{plot_filename}', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Plot saved successfully: {plot_filename}")
+
+except Exception as e:
+    plt.close()  # Cleanup on error
+    print("Error:", str(e))
+    traceback.print_exc()
+    """
+
+            # Create script file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                f.write(script_content)
+                temp_script = f.name
+
+            # Run container
+            container = client.containers.run(
+                image=self.config.docker_image,
+                command="python /app/plot_script.py",
+                volumes={
+                    temp_script: {'bind': '/app/plot_script.py', 'mode': 'ro'},
+                    temp_pickle: {'bind': '/project/dataframe.pkl', 'mode': 'ro'},
+                    self.config.python_project_folder: {'bind': '/project', 'mode': 'rw'}
+                },
+                remove=False,
+                mem_limit=self.config.docker_memory_limit,
+                network_disabled=True,
+                detach=True
+            )
+
+            wait_result = container.wait(timeout=self.config.request_timeout)
+
+            # Fetch logs
+            logs = container.logs(stdout=True, stderr=True)
+            output = logs.decode('utf-8', errors='replace') if isinstance(logs, (bytes, bytearray)) else str(logs)
+
+            exit_code = wait_result.get('StatusCode', 0) if isinstance(wait_result, dict) else 0
+            if exit_code != 0:
+                return {"error": f"Container exited with code {exit_code}", "output": output}
+
+            # Check if plot file was created
+            if not os.path.exists(plot_path):
+                return {"error": "Plot file was not created", "output": output}
+
+            return {
+                "download_link": f"http://thestitchpatterns.store:8000/files/{plot_filename}",
+                "plot_id": plot_id,
+                "filename": plot_filename,
+                "message": "Plot created successfully",
+                "output": output
+            }
+
+        except TimeoutError:
+            if container:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+            return {"error": f"Execution timed out after {self.config.request_timeout} seconds"}
+
+        except Exception as e:
+            if container:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+            return {"error": f"Execution error: {str(e)}"}
+
+        finally:
+            if container:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+            if temp_script and os.path.exists(temp_script):
+                os.unlink(temp_script)
+            if temp_pickle and os.path.exists(temp_pickle):
+                os.unlink(temp_pickle)

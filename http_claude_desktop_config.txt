@@ -1,0 +1,10 @@
+
+
+"ambient-sensors": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://thestitchpatterns.store:8000/mcp",
+        "--allow-http"
+      ]
+    }
