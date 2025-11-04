@@ -5,7 +5,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from fastmcp import FastMCP
 import sqlparse
 import uuid
-
+import pandas as pd
 from python_executor import PandasExecutor
 
 from dotenv import load_dotenv                                                                                                                                                                                                                                                                                                                                                    
@@ -80,7 +80,7 @@ def clear_query_cache(query_id: str = None) -> str:
         query_cache.clear()
         return "Cleared all cached queries"
 
-@mcp.tool(description="Execute a read-only SQL SELECT query against the ambient sensors database. Returns a query_id for caching, along with metadata (row count, columns, data types) and a preview of the first 5 rows. Use this query_id with execute_pandas to analyze the results.")
+@mcp.tool(description="Execute a read-only SQL SELECT query against the ambient sensors database. Returns a query_id for caching, along with metadata (row count, columns, data types) and a preview of the first 5 rows. Use this query_id with execute_pandas to analyze the results. Check the schema://database resource for table structure before writing queries.")
 def execute_sql_query(sql: str) -> dict:
     
     # Validate query is safe
@@ -92,7 +92,7 @@ def execute_sql_query(sql: str) -> dict:
     try:
         # Execute query with read-only transaction
         conn.set_session(readonly=True)
-        df = pd.read_sql_query(sql, cur)
+        df = pd.read_sql_query(sql, conn)
         
         # Generate unique ID
         query_id = str(uuid.uuid4())
@@ -120,7 +120,7 @@ def list_sensors() -> str:
     resp_dict = create_sensor_dict(results, description)
     return str(resp_dict)
 
-@mcp.tool(description="Get the most recent readings from a specific sensor by sensor_id. Returns up to 'limit' readings (default 10) sorted by timestamp descending. Use list_sensors first to find available sensor_id values.")
+'''@mcp.tool(description="Get the most recent readings from a specific sensor by sensor_id. Returns up to 'limit' readings (default 10) sorted by timestamp descending. Use list_sensors first to find available sensor_id values.")
 def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
     query = """
         SELECT * FROM sensor_readings
@@ -138,10 +138,48 @@ def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
         readings.append(reading)
     
     return str(readings)
+    '''
 
 @mcp.tool(description="Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use. The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.")
 def execute_pandas(query_id: str, code: str) -> str:
     return pandasEx.execute_code(query_id, query_cache, code)
+
+@mcp.resource("schema://database")
+def get_database_schema() -> str:
+    """Provide database schema information for the sensor database"""
+    
+    schema_info = []
+    
+    # Get all tables
+    cur_col.execute("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public'
+    """)
+    tables = cur.fetchall()
+    
+    # For each table, get column details
+    for (table_name,) in tables:
+        cur_col.execute("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns 
+            WHERE table_name = %s
+            ORDER BY ordinal_position
+        """, (table_name,))
+        
+        columns = cur.fetchall()
+        
+        schema_info.append(f"\nTable: {table_name}")
+        for col_name, data_type, nullable in columns:
+            schema_info.append(f"  - {col_name}: {data_type} {'(nullable)' if nullable == 'YES' else ''}")
+    
+    return "\n".join(schema_info)
+
+#@mcp.resource("guide://tools")
+#    def get_tool_guide() -> str:
+        
+
+
 
 # Export app for uvicorn
 app = mcp.http_app()
