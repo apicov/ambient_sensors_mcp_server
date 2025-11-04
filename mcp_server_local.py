@@ -6,7 +6,7 @@ from fastmcp import FastMCP
 import sqlparse
 import uuid
 import pandas as pd
-from python_executor import PandasExecutor, MatplotlibExecutor
+from python_executor import AnalysisExecutor, MatplotlibExecutor
 import json
 from pathlib import Path
 
@@ -27,13 +27,13 @@ conn = psycopg2.connect(**DB_CONFIG_COLUMNAR)
 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 cur = conn.cursor()
 
-# Store query results
-query_cache = {}
+# Directory for storing query results and plots
+files_path = Path(os.getenv("PYTHON_PROJECT_FOLDER", "./query_results"))
+files_path.mkdir(exist_ok=True)
 
-pandasEx = PandasExecutor()
-matplotlibEx = MatplotlibExecutor()
-
-csv_folder = os.getenv("PYTHON_PROJECT_FOLDER")
+# Initialize executors
+analysisEx = AnalysisExecutor()
+plotEx = MatplotlibExecutor()
 
 # Create FastMCP server
 mcp = FastMCP("ambient-sensors-server")
@@ -74,25 +74,31 @@ def create_sensor_dict(results, description):
         sensor_dict[sensor_id] = sensor_info
     return sensor_dict
 
-#@mcp.tool()
+@mcp.tool()
 def clear_query_cache(query_id: str = None) -> str:
     '''
-    Clear cached query results. Provide query_id to clear a specific query, or omit to clear all cached queries.
+    Clear cached query results. Provide query_id to clear a specific query CSV file, or omit to clear all cached query files.
     '''
     if query_id:
-        if query_id in query_cache:
-            del query_cache[query_id]
+        csv_file = files_path / f"{query_id}.csv"
+        if csv_file.exists():
+            csv_file.unlink()
             return f"Cleared query {query_id}"
         return f"Query {query_id} not found"
     else:
-        query_cache.clear()
-        return "Cleared all cached queries"
+        # Clear all CSV files
+        count = 0
+        for csv_file in files_path.glob("*.csv"):
+            csv_file.unlink()
+            count += 1
+        return f"Cleared {count} cached query files"
 
 @mcp.tool()
 def execute_sql_query(sql: str) -> dict:
     '''
     Execute a read-only SQL SELECT query against the ambient sensors database.
-    Returns a path to a CSV file containing the query results and a query_id of the cached DataFrame for further analysis with execute_matplotlib tool.
+    Returns dictionary with query result if data size is small.
+    Returns query_id for large results - use this with analyze_data or create_plot tools.
     '''
     # Validate query is safe
     if not is_safe_query(sql):
@@ -108,15 +114,31 @@ def execute_sql_query(sql: str) -> dict:
         # Generate unique ID
         query_id = str(uuid.uuid4())
 
-        # Cache the DataFrame
-        query_cache[query_id] = df
+        # Convert to dict or directly to JSON
+        d = df.to_dict(orient='records')
+        s_json = json.dumps(d, ensure_ascii=False, default=str)
 
-        # Save dataframe as csv file
-        csv_path = f"{query_id}.csv"
-        df.to_csv(Path(csv_folder)/csv_path, index=False)
+        if len(s_json) < 10000:
+            return {
+                "rows": len(df),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "data": s_json
+            }
+        else:
+            # Save DataFrame to CSV
+            csv_path = files_path / f"{query_id}.csv"
+            df.to_csv(csv_path, index=False)
 
-        return {"csv_path": str(Path(csv_folder)/csv_path), "query_id": query_id}
-
+            # Return metadata
+            return {
+                "query_id": query_id,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "csv_path": str(csv_path),
+                "message": "Result too large - use query_id with analyze_data or create_plot tools"
+            }
     except Exception as e:
         return {"error": f"Query execution failed: {str(e)}"}
 
@@ -132,24 +154,25 @@ def list_sensors() -> str:
     resp_dict = create_sensor_dict(results, description)
     return str(resp_dict)
 
-#@mcp.tool()
-def execute_pandas(query_id: str, code: str) -> str:
+@mcp.tool()
+def analyze_data(query_id: str, code: str) -> str:
     '''
-    Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use.
-    The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.
-    Use print() for retrieving required data.
-    Use base64 encoding to print and retrieve images.
+    Execute pandas analysis code on a query result DataFrame. The query_id identifies which query result to analyze.
+    The DataFrame is available as 'df' in your code. Designed for statistical analysis with short outputs.
+    Examples: df.describe(), df.corr(), df.groupby().mean(), df.value_counts()
+    Use print() to display results.
     '''
-    return pandasEx.execute_code(query_id, query_cache, code)
+    return analysisEx.analyze_data(query_id, str(files_path), code)
 
 @mcp.tool()
-def execute_matplotlib(query_id: str, plot_code: str) -> str:
+def create_plot(query_id: str, plot_code: str) -> dict:
     '''
-    Execute Python/matplotlib code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use.
-    The DataFrame is available as 'df' in your code. Use this for creating visualizations based on query results.
-    Use plt.show() to generate and save plots. The generated plot will be saved as an image file and a download link will be provided.
+    Create a matplotlib plot from a query result DataFrame. The query_id identifies which query result to plot.
+    The DataFrame is available as 'df', pyplot as 'plt' in your code.
+    Write plotting code (e.g., plt.plot(df['x'], df['y']), plt.xlabel('X'), plt.title('My Plot')).
+    Plot will be automatically saved with a UUID and path returned.
     '''
-    return matplotlibEx.create_plot(query_id, query_cache, plot_code)
+    return plotEx.create_plot(query_id, str(files_path), plot_code)
 
 
 @mcp.tool()

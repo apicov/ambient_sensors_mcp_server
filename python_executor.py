@@ -13,7 +13,7 @@ load_dotenv()
 class Config:
     """Configuration settings"""
     python_project_folder: str = ""
-    request_timeout: int = 10
+    request_timeout: int = 30
     max_message_length: int = 1024
     docker_image: str = "continuumio/miniconda3"
     docker_memory_limit: str = "128m"
@@ -27,22 +27,26 @@ class Config:
         )
 
 
-class PandasExecutor:
-    """Execute pandas code in a Docker container"""  
+class AnalysisExecutor:
+    """Execute pandas analysis code in a Docker container for statistical analysis and data operations"""
     def __init__(self, config: Config = None):
         if config is None:
             self.config = Config.from_env()
         else:
-            self.config = config 
+            self.config = config
 
-    def execute_code(self, query_id: str, query_cache:dict, code: str) -> str:
-        """Execute pandas code on a cached DataFrame using Docker"""
-        
-        # Get DataFrame from cache
-        if query_id not in query_cache:
-            return f"Error: Query ID '{query_id}' not found in cache"
-        
-        df = query_cache[query_id]
+    def analyze_data(self, query_id: str, csv_folder: str, code: str) -> str:
+        """
+        Execute pandas analysis code on a CSV file using Docker.
+        Designed for statistical analysis and data operations with short outputs.
+        Examples: df.describe(), df.corr(), df.groupby().mean(), df.value_counts()
+        The DataFrame is available as 'df'. Use print() to display results.
+        """
+
+        # Check if CSV file exists
+        csv_path = os.path.join(csv_folder, f"{query_id}.csv")
+        if not os.path.exists(csv_path):
+            return f"Error: Query ID '{query_id}' not found (CSV file does not exist)"
         
         # Validate Docker connection
         try:
@@ -59,25 +63,20 @@ class PandasExecutor:
             return "Error: Code cannot be empty after stripping whitespace"
         
         temp_script = None
-        temp_pickle = None
-        
+        container = None
+
         try:
-            # Pickle DataFrame to temp file
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.pkl', delete=False) as f:
-                pickle.dump(df, f)
-                temp_pickle = f.name
-            
-            # Prepare script with DataFrame loading
-            script_content = """
-import pickle
+            # Prepare script with CSV loading
+            script_content = f"""
 import pandas as pd
+import numpy as np
 import traceback
 
-# Load DataFrame
-with open('/project/dataframe.pkl', 'rb') as f:
-    df = pickle.load(f)
+# Load DataFrame from CSV
+df = pd.read_csv('/project/{query_id}.csv')
 
 print("DataFrame loaded:", df.shape[0], "rows,", df.shape[1], "columns")
+print("=" * 50)
 
 try:
 """ + textwrap.indent(textwrap.dedent(code), '    ') + """
@@ -85,22 +84,19 @@ except Exception as e:
     print("Error:", str(e))
     traceback.print_exc()
     """
-            
+
             # Create script file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(script_content)
                 temp_script = f.name
-            
-            print(f"Executing script:\n{script_content}")
-            print("-------------------------------------")
+
             # Run container
             container = client.containers.run(
                 image=self.config.docker_image,
                 command="python /app/script.py",
                 volumes={
                     temp_script: {'bind': '/app/script.py', 'mode': 'ro'},
-                    temp_pickle: {'bind': '/project/dataframe.pkl', 'mode': 'ro'},
-                    self.config.python_project_folder: {'bind': '/project', 'mode': 'rw'}
+                    csv_folder: {'bind': '/project', 'mode': 'ro'}
                 },
                 remove=False,
                 mem_limit=self.config.docker_memory_limit,
@@ -152,8 +148,6 @@ except Exception as e:
                     pass
             if temp_script and os.path.exists(temp_script):
                 os.unlink(temp_script)
-            if temp_pickle and os.path.exists(temp_pickle):
-                os.unlink(temp_pickle)
 
 
 class MatplotlibExecutor:
@@ -164,14 +158,13 @@ class MatplotlibExecutor:
         else:
             self.config = config
 
-    def create_plot(self, query_id: str, query_cache: dict, plot_code: str) -> dict:
-        """Execute matplotlib code to create a plot from cached DataFrame"""
+    def create_plot(self, query_id: str, csv_folder: str, plot_code: str) -> dict:
+        """Execute matplotlib code to create a plot from CSV file"""
 
-        # Get DataFrame from cache
-        if query_id not in query_cache:
-            return {"error": f"Query ID '{query_id}' not found in cache"}
-
-        df = query_cache[query_id]
+        # Check if CSV file exists
+        csv_path = os.path.join(csv_folder, f"{query_id}.csv")
+        if not os.path.exists(csv_path):
+            return {"error": f"Query ID '{query_id}' not found (CSV file does not exist)"}
 
         # Validate Docker connection
         try:
@@ -188,7 +181,6 @@ class MatplotlibExecutor:
             return {"error": "Code cannot be empty after stripping whitespace"}
 
         temp_script = None
-        temp_pickle = None
         container = None
 
         try:
@@ -197,25 +189,18 @@ class MatplotlibExecutor:
             # Generate plot UUID
             plot_id = str(uuid.uuid4())
             plot_filename = f"{plot_id}.png"
-            plot_path = os.path.join(self.config.python_project_folder, plot_filename)
+            plot_path = os.path.join(csv_folder, plot_filename)
 
-            # Pickle DataFrame to temp file
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.pkl', delete=False) as f:
-                pickle.dump(df, f)
-                temp_pickle = f.name
-
-            # Prepare script with DataFrame loading and plotting
+            # Prepare script with CSV loading and plotting
             script_content = f"""
-import pickle
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import traceback
 
-# Load DataFrame
-with open('/project/dataframe.pkl', 'rb') as f:
-    df = pickle.load(f)
+# Load DataFrame from CSV
+df = pd.read_csv('/project/{query_id}.csv')
 
 print("DataFrame loaded:", df.shape[0], "rows,", df.shape[1], "columns")
 
@@ -248,8 +233,7 @@ except Exception as e:
                 command="python /app/plot_script.py",
                 volumes={
                     temp_script: {'bind': '/app/plot_script.py', 'mode': 'ro'},
-                    temp_pickle: {'bind': '/project/dataframe.pkl', 'mode': 'ro'},
-                    self.config.python_project_folder: {'bind': '/project', 'mode': 'rw'}
+                    csv_folder: {'bind': '/project', 'mode': 'rw'}
                 },
                 remove=False,
                 mem_limit=self.config.docker_memory_limit,
@@ -272,7 +256,7 @@ except Exception as e:
                 return {"error": "Plot file was not created", "output": output}
 
             return {
-                "download_link": f"http://thestitchpatterns.store:8000/files/{plot_filename}",
+                "plot_download_link": f"http://thestitchpatterns.store:8000/files/{plot_filename}",
                 "plot_id": plot_id,
                 "filename": plot_filename,
                 "message": "Plot created successfully",
@@ -311,5 +295,3 @@ except Exception as e:
                     pass
             if temp_script and os.path.exists(temp_script):
                 os.unlink(temp_script)
-            if temp_pickle and os.path.exists(temp_pickle):
-                os.unlink(temp_pickle)

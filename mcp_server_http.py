@@ -6,7 +6,7 @@ from fastmcp import FastMCP
 import sqlparse
 import uuid
 import pandas as pd
-from python_executor import PandasExecutor
+from python_executor import AnalysisExecutor, MatplotlibExecutor
 from starlette.staticfiles import StaticFiles
 from starlette.routing import Mount
 from pathlib import Path
@@ -29,12 +29,13 @@ conn = psycopg2.connect(**DB_CONFIG_COLUMNAR)
 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 cur = conn.cursor()
 
-# Store query results
-query_cache = {}
+# Directory for storing query results and plots
+files_path = Path(os.getenv("PYTHON_PROJECT_FOLDER", "./query_results"))
+files_path.mkdir(exist_ok=True)
 
-pandasEx = PandasExecutor()
-
-files_path = os.getenv("PYTHON_PROJECT_FOLDER")
+# Initialize executors
+analysisEx = AnalysisExecutor()
+plotEx = MatplotlibExecutor()
 
 # Create FastMCP server
 mcp = FastMCP("ambient-sensors-server")
@@ -78,66 +79,56 @@ def create_sensor_dict(results, description):
 @mcp.tool()
 def clear_query_cache(query_id: str = None) -> str:
     '''
-    Clear cached query results. Provide query_id to clear a specific query, or omit to clear all cached queries.
+    Clear cached query results. Provide query_id to clear a specific query CSV file, or omit to clear all cached query files.
     '''
     if query_id:
-        if query_id in query_cache:
-            del query_cache[query_id]
+        csv_file = files_path / f"{query_id}.csv"
+        if csv_file.exists():
+            csv_file.unlink()
             return f"Cleared query {query_id}"
         return f"Query {query_id} not found"
     else:
-        query_cache.clear()
-        return "Cleared all cached queries"
+        # Clear all CSV files
+        count = 0
+        for csv_file in files_path.glob("*.csv"):
+            csv_file.unlink()
+            count += 1
+        return f"Cleared {count} cached query files"
 
 @mcp.tool()
 def execute_sql_query(sql: str) -> dict:
     '''
-    Execute a read-only SQL SELECT query against the ambient sensors database. 
-    Returns dictionary with query result if data size is small. 
-    Returns query_id of generated dataframe resource, accessible as df variable through pandas_executor tool (python code) if data size large. Along with a download link to a CSV file.
+    Execute a read-only SQL SELECT query against the ambient sensors database.
+    Returns query_id and CSV download link for all queries.
+    Use query_id with analyze_data or create_plot tools for further analysis.
     '''
     # Validate query is safe
     if not is_safe_query(sql):
         return {
             "error": "Query contains forbidden operations. Only SELECT queries are allowed."
         }
-    
+
     try:
         # Execute query with read-only transaction
         conn.set_session(readonly=True)
         df = pd.read_sql_query(sql, conn)
-        
+
         # Generate unique ID
         query_id = str(uuid.uuid4())
 
-        # convert to dict or directly to JSON
-        d = df.to_dict(orient='records')      # Python dict/list structure
-        s_json = json.dumps(d, ensure_ascii=False)  # JSON string
-    
+        # Save DataFrame to CSV
+        csv_path = files_path / f"{query_id}.csv"
+        df.to_csv(csv_path, index=False)
 
-        if len(s_json) < 10000:
-            return {
-                #"csv_download_link":"http://thestitchpatterns.store:8000/files/" + query_id + ".csv",
-                #"query_id": query_id,
-                "rows": len(df),
-                "columns": list(df.columns),
-                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "data": s_json
-            }
-        else:
-            # Save result in csv
-            df.to_csv(Path(files_path)/(query_id + ".csv"), index=False)
-            # Cache the DataFrame
-            query_cache[query_id] = df
-            # Return metadata
-            return {
-                "csv_download_link":"http://thestitchpatterns.store:8000/files/" + query_id + ".csv",
-                "query_id": query_id,
-                "rows": len(df),
-                "columns": list(df.columns),
-                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "data": "file too large, access it with the query_id through pandas_executor tool"
-            }
+        # Return metadata
+        return {
+            "csv_download_link": f"http://thestitchpatterns.store:8000/files/{query_id}.csv",
+            "query_id": query_id,
+            "rows": len(df),
+            "columns": list(df.columns),
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "csv_path": str(csv_path)
+        }
     except Exception as e:
         return {"error": f"Query execution failed: {str(e)}"}
 
@@ -153,35 +144,27 @@ def list_sensors() -> str:
     resp_dict = create_sensor_dict(results, description)
     return str(resp_dict)
 
-'''@mcp.tool(description="Get the most recent readings from a specific sensor by sensor_id. Returns up to 'limit' readings (default 10) sorted by timestamp descending. Use list_sensors first to find available sensor_id values.")
-def get_sensor_data(sensor_id: str, limit: int = 10) -> str:
-    query = """
-        SELECT * FROM sensor_readings
-        WHERE sensor_id = %s
-        ORDER BY timestamp DESC
-        LIMIT %s
-    """
-    cur.execute(query, (sensor_id, limit))
-    results = cur.fetchall()
-    description = [d.name for d in cur.description]
-    
-    readings = []
-    for row in results:
-        reading = {description[i]: row[i] for i in range(len(description))}
-        readings.append(reading)
-    
-    return str(readings)
+@mcp.tool()
+def analyze_data(query_id: str, code: str) -> str:
     '''
+    Execute pandas analysis code on a query result DataFrame. The query_id identifies which query result to analyze.
+    The DataFrame is available as 'df' in your code. Designed for statistical analysis with short outputs.
+    Examples: df.describe(), df.corr(), df.groupby().mean(), df.value_counts()
+    Use print() to display results.
+    '''
+    return analysisEx.analyze_data(query_id, str(files_path), code)
 
 @mcp.tool()
-def execute_pandas(query_id: str, code: str) -> str:
+def create_plot(query_id: str, plot_code: str) -> dict:
     '''
-    Execute Python/pandas code against a cached DataFrame from execute_sql_query. The query_id identifies which cached query result to use. 
-    The DataFrame is available as 'df' in your code. Use this for data analysis, transformations, visualizations, or calculations on query results.
-    Use print() for retrieving required data.
-    Use base64 encoding to print and retrieve images.
+    Create a matplotlib plot from a query result DataFrame. The query_id identifies which query result to plot.
+    The DataFrame is available as 'df', pyplot as 'plt' in your code.
+    Write plotting code (e.g., plt.plot(df['x'], df['y']), plt.xlabel('X'), plt.title('My Plot')).
+    Plot will be automatically saved with a UUID and download link will be returned.
     '''
-    return pandasEx.execute_code(query_id, query_cache, code)
+    result = plotEx.create_plot(query_id, str(files_path), plot_code)
+
+    return result
 
 @mcp.tool()
 def get_database_schema() -> str:
@@ -222,7 +205,7 @@ def get_database_schema() -> str:
 app = mcp.http_app()
 
 app.routes.append(
-    Mount("/files", StaticFiles(directory=files_path), name="files"))
+    Mount("/files", StaticFiles(directory=str(files_path)), name="files"))
 
 if __name__ == "__main__":
     import sys
