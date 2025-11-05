@@ -1,0 +1,26 @@
+# FastMCP - MCP server framework
+fastmcp
+
+# Database
+psycopg2-binary
+
+# Data processing
+pandas
+numpy
+sqlparse
+
+# MQTT client
+paho-mqtt
+
+# Docker integration
+docker
+
+# HTTP requests
+requests
+
+# Environment variables
+python-dotenv
+
+# Web server (included with FastMCP but listed for clarity)
+uvicorn
+starlette
