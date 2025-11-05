@@ -7,13 +7,11 @@ import sqlparse
 import uuid
 import pandas as pd
 from python_executor import AnalysisExecutor, MatplotlibExecutor
-from starlette.staticfiles import StaticFiles
-from starlette.routing import Mount
-from pathlib import Path
 import json
+from pathlib import Path
 
-from dotenv import load_dotenv                                                                                                                                                                                                                                                                                                                                                    
-load_dotenv() 
+from dotenv import load_dotenv
+load_dotenv()
 
 # Database configuration
 DB_CONFIG_COLUMNAR = {
@@ -47,7 +45,7 @@ mcp = FastMCP("ambient-sensors-server")
 def is_safe_query(sql: str) -> bool:
     """Validate that SQL query is read-only (SELECT only)"""
     # Forbidden keywords that modify data
-    forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 
+    forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER',
                  'CREATE', 'TRUNCATE', 'REPLACE', 'MERGE']
 
     # Parse and normalize the SQL
@@ -169,62 +167,39 @@ def create_plot(query_id: str, plot_code: str) -> dict:
 
     return result
 
+
 @mcp.tool()
 def get_database_schema() -> str:
     '''
     Provide database schema information for the sensor database. Use it before starting sql queries.
     '''
     schema_info = []
-    
+
     # Get all tables
     cur.execute("""
-        SELECT table_name 
-        FROM information_schema.tables 
+        SELECT table_name
+        FROM information_schema.tables
         WHERE table_schema = 'public'
     """)
     tables = cur.fetchall()
-    
+
     # For each table, get column details
     for (table_name,) in tables:
         cur.execute("""
             SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns 
+            FROM information_schema.columns
             WHERE table_name = %s
             ORDER BY ordinal_position
         """, (table_name,))
-        
+
         columns = cur.fetchall()
-        
+
         schema_info.append(f"\nTable: {table_name}")
         for col_name, data_type, nullable in columns:
             schema_info.append(f"  - {col_name}: {data_type} {'(nullable)' if nullable == 'YES' else ''}")
-    
+
     return "\n".join(schema_info)
 
-#@mcp.resource("guide://tools")
-#    def get_tool_guide() -> str:
-        
-# Export app for uvicorn
-app = mcp.http_app()
-
-app.routes.append(
-    Mount("/files", StaticFiles(directory=str(files_path)), name="files"))
-
 if __name__ == "__main__":
-    import sys
-    
-    # Check for command line argument
-    if len(sys.argv) > 1 and sys.argv[1] == "https":
-        print("Starting HTTPS server on port 8001...")
-        import uvicorn
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=8001,
-            ssl_keyfile="/etc/letsencrypt/live/thestitchpatterns.store/privkey.pem",
-            ssl_certfile="/etc/letsencrypt/live/thestitchpatterns.store/fullchain.pem"
-        )
-    else:
-        print("Starting HTTP server on port 8000...")
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run as local stdio server
+    mcp.run()
