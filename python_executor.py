@@ -2,12 +2,13 @@ import docker
 import tempfile
 import textwrap
 import os
-import pickle
 
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 load_dotenv()
+
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 
 @dataclass
 class Config:
@@ -256,7 +257,7 @@ except Exception as e:
                 return {"error": "Plot file was not created", "output": output}
 
             return {
-                "plot_download_link": f"http://thestitchpatterns.store:8000/files/{plot_filename}",
+                "plot_download_link": f"{SERVER_URL}/files/{plot_filename}",
                 "plot_id": plot_id,
                 "filename": plot_filename,
                 "message": "Plot created successfully",

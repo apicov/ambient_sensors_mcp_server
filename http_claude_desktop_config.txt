@@ -4,7 +4,21 @@
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://thestitchpatterns.store:8000/mcp",
+        "http://myserver/mcp",
         "--allow-http"
+      ]
+    }
+
+
+    "ambient-sensors": {
+      "command": "pythonpath/envs/ml/bin/python3.13",
+      "args": ["mypath/mcp_server_local.py"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "folderpath/sandbox"
       ]
     }

@@ -33,6 +33,9 @@ cur = conn.cursor()
 files_path = Path(os.getenv("PYTHON_PROJECT_FOLDER", "./query_results"))
 files_path.mkdir(exist_ok=True)
 
+# Server URL and port
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
+
 # Initialize executors
 analysisEx = AnalysisExecutor()
 plotEx = MatplotlibExecutor()
@@ -122,7 +125,7 @@ def execute_sql_query(sql: str) -> dict:
 
         # Return metadata
         return {
-            "csv_download_link": f"http://thestitchpatterns.store:8000/files/{query_id}.csv",
+            "csv_download_link": f"{SERVER_URL}/files/{query_id}.csv",
             "query_id": query_id,
             "rows": len(df),
             "columns": list(df.columns),
