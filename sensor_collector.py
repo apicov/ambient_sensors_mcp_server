@@ -191,6 +191,8 @@ class ColumnarDatabaseStorage(DatabaseStorage):
             self._store_scd30(sensor_id, timestamp, values)
         elif sensor_type == 'bmp280':
             self._store_bmp280(sensor_id, timestamp, values)
+        elif sensor_type == 'hm3301':
+            self._store_hm3301(sensor_id, timestamp, values)
         else:
             logger.warning(f"{self.db_type}: Unknown sensor type: {sensor_type}")
 
@@ -241,6 +243,34 @@ class ColumnarDatabaseStorage(DatabaseStorage):
         except Exception as e:
             conn.rollback()
             logger.error(f"✗ {self.db_type}: Error storing BMP280 data: {e}")
+        finally:
+            self.db_pool.putconn(conn)
+
+    def _store_hm3301(self, sensor_id, timestamp, values):
+        """Store HM3301 data in hm3301_measurements table"""
+        conn = self.db_pool.getconn()
+        try:
+            cur = conn.cursor()
+
+            pm1_0_std = values.get('pm1_0_std', {}).get('reading')
+            pm2_5_std = values.get('pm2_5_std', {}).get('reading')
+            pm10_std = values.get('pm10_std', {}).get('reading')
+            pm1_0_atm = values.get('pm1_0_atm', {}).get('reading')
+            pm2_5_atm = values.get('pm2_5_atm', {}).get('reading')
+            pm10_atm = values.get('pm10_atm', {}).get('reading')
+
+            cur.execute("""
+                INSERT INTO hm3301_measurements (time, sensor_id, pm1_0_std, pm2_5_std, pm10_std, pm1_0_atm, pm2_5_atm, pm10_atm)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (timestamp, sensor_id, pm1_0_std, pm2_5_std, pm10_std, pm1_0_atm, pm2_5_atm, pm10_atm))
+
+            conn.commit()
+            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, HM3301: PM1.0={pm1_0_std}/{pm1_0_atm}, PM2.5={pm2_5_std}/{pm2_5_atm}, PM10={pm10_std}/{pm10_atm} µg/m³")
+            cur.close()
+
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"✗ {self.db_type}: Error storing HM3301 data: {e}")
         finally:
             self.db_pool.putconn(conn)
 
