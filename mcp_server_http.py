@@ -18,7 +18,7 @@ load_dotenv()
 # Database configuration
 DB_CONFIG_COLUMNAR = {
     'host': os.getenv("DB_HOST"),
-    'database': 'ambient_sensors_columnar',
+    'database': os.getenv("DB_NAME"),
     'user': os.getenv("DB_USER"),
     'password': os.getenv("DB_PASSWORD"),
     'port': 5432
