@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv() 
 
 # Database configuration
-DB_CONFIG_COLUMNAR = {
+DB_CONFIG = {
     'host': os.getenv("DB_HOST"),
     'database': os.getenv("DB_NAME"),
     'user': os.getenv("DB_USER"),
@@ -25,7 +25,7 @@ DB_CONFIG_COLUMNAR = {
 }
 
 # Establish database connection
-conn = psycopg2.connect(**DB_CONFIG_COLUMNAR)
+conn = psycopg2.connect(**DB_CONFIG)
 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 cur = conn.cursor()
 

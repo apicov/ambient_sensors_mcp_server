@@ -1,7 +1,7 @@
 """
 Device Activity Inspector
 
-Monitors sensor devices in the columnar database and sends Pushover notifications
+Monitors sensor devices in the database and sends Pushover notifications
 when devices haven't sent data within the configured inactivity threshold.
 """
 
@@ -21,7 +21,7 @@ INACTIVITY_THRESHOLD = int(os.getenv('INACTIVITY_THRESHOLD', 300))
 
 DB_CONFIG = {
     'host': os.getenv("DB_HOST"),
-    'database': 'ambient_sensors_columnar',
+    'database': os.getenv("DB_NAME"),
     'user': os.getenv("DB_USER"),
     'password': os.getenv("DB_PASSWORD"),
     'port': 5432
@@ -94,20 +94,13 @@ def get_latest_message_time(conn, device_id):
     """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT s.sensor_id, s.sensor_type, MAX(m.time) as last_seen
+            SELECT MAX(m.time) as last_seen
             FROM sensors s
-            LEFT JOIN scd30_measurements m ON s.sensor_id = m.sensor_id
+            LEFT JOIN measurements m ON s.sensor_id = m.sensor_id
             WHERE s.device_id = %s
-            GROUP BY s.sensor_id, s.sensor_type
-            UNION ALL
-            SELECT s.sensor_id, s.sensor_type, MAX(m.time) as last_seen
-            FROM sensors s
-            LEFT JOIN bmp280_measurements m ON s.sensor_id = m.sensor_id
-            WHERE s.device_id = %s
-            GROUP BY s.sensor_id, s.sensor_type
-        """, (device_id, device_id))
-        results = cur.fetchall()
-        return max((r[2] for r in results if r[2]), default=None)
+        """, (device_id,))
+        result = cur.fetchone()
+        return result[0] if result else None
 
 def check_device_activity():
     """

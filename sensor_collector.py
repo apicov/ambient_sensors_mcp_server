@@ -24,25 +24,13 @@ MQTT_USERNAME = None  # Set if authentication required
 MQTT_PASSWORD = None
 
 # Database configuration
-DB_CONFIG_COLUMNAR = {
+DB_CONFIG = {
     'host': os.getenv("DB_HOST"),
-    'database': 'ambient_sensors_columnar',
+    'database': os.getenv("DB_NAME"),
     'user': os.getenv("DB_USER"),
     'password': os.getenv("DB_PASSWORD"),
     'port': 5432
 }
-
-DB_CONFIG_FLEXIBLE = {
-    'host': os.getenv("DB_HOST"),
-    'database': 'ambient_sensors_flexible',
-    'user': os.getenv("DB_USER"),
-    'password': os.getenv("DB_PASSWORD"),
-    'port': 5432
-}
-
-# Enable/disable database storage
-ENABLE_COLUMNAR_DB = True
-ENABLE_FLEXIBLE_DB = True
 
 
 # ==================== DATABASE STORAGE CLASSES ====================
@@ -166,113 +154,6 @@ class DatabaseStorage:
     def store_sensor_data(self, device_id, sensor_type, timestamp, values):
         """Store sensor data - must be implemented by subclass"""
         raise NotImplementedError("Subclass must implement store_sensor_data()")
-
-
-class ColumnarDatabaseStorage(DatabaseStorage):
-    """Columnar database storage with sensor-specific tables"""
-    def __init__(self, db_config):
-        super().__init__(db_config, "Columnar")
-
-    def store_sensor_data(self, device_id, sensor_type, timestamp, values):
-        """Store sensor data in sensor-specific tables"""
-        sensor_id = self.get_sensor_id(device_id, sensor_type)
-
-        if not sensor_id:
-            logger.warning(f"{self.db_type}: Sensor not found: {device_id}/{sensor_type} - creating automatically")
-            self.ensure_sensor_exists(device_id, sensor_type, {})
-            sensor_id = self.get_sensor_id(device_id, sensor_type)
-
-            if not sensor_id:
-                logger.error(f"{self.db_type}: Failed to create sensor: {device_id}/{sensor_type}")
-                return
-
-        # Route to appropriate sensor-specific storage method
-        if sensor_type == 'scd30':
-            self._store_scd30(sensor_id, timestamp, values)
-        elif sensor_type == 'bmp280':
-            self._store_bmp280(sensor_id, timestamp, values)
-        elif sensor_type == 'hm3301':
-            self._store_hm3301(sensor_id, timestamp, values)
-        else:
-            logger.warning(f"{self.db_type}: Unknown sensor type: {sensor_type}")
-
-    def _store_scd30(self, sensor_id, timestamp, values):
-        """Store SCD30 data in scd30_measurements table"""
-        conn = self.db_pool.getconn()
-        try:
-            cur = conn.cursor()
-
-            co2 = values.get('co2', {}).get('reading')
-            temperature = values.get('temperature', {}).get('reading')
-            humidity = values.get('humidity', {}).get('reading')
-
-            cur.execute("""
-                INSERT INTO scd30_measurements (time, sensor_id, co2, temperature, humidity)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (timestamp, sensor_id, co2, temperature, humidity))
-
-            conn.commit()
-            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, SCD30: CO2={co2}ppm, T={temperature}°C, H={humidity}%")
-            cur.close()
-
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"✗ {self.db_type}: Error storing SCD30 data: {e}")
-        finally:
-            self.db_pool.putconn(conn)
-
-    def _store_bmp280(self, sensor_id, timestamp, values):
-        """Store BMP280 data in bmp280_measurements table"""
-        conn = self.db_pool.getconn()
-        try:
-            cur = conn.cursor()
-
-            pressure = values.get('pressure', {}).get('reading')
-            temperature = values.get('temperature', {}).get('reading')
-            humidity = values.get('humidity', {}).get('reading')
-
-            cur.execute("""
-                INSERT INTO bmp280_measurements (time, sensor_id, pressure, temperature, humidity)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (timestamp, sensor_id, pressure, temperature, humidity))
-
-            conn.commit()
-            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, BMP280: P={pressure}Pa, T={temperature}°C, H={humidity}%")
-            cur.close()
-
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"✗ {self.db_type}: Error storing BMP280 data: {e}")
-        finally:
-            self.db_pool.putconn(conn)
-
-    def _store_hm3301(self, sensor_id, timestamp, values):
-        """Store HM3301 data in hm3301_measurements table"""
-        conn = self.db_pool.getconn()
-        try:
-            cur = conn.cursor()
-
-            pm1_0_std = values.get('pm1_0_std', {}).get('reading')
-            pm2_5_std = values.get('pm2_5_std', {}).get('reading')
-            pm10_std = values.get('pm10_std', {}).get('reading')
-            pm1_0_atm = values.get('pm1_0_atm', {}).get('reading')
-            pm2_5_atm = values.get('pm2_5_atm', {}).get('reading')
-            pm10_atm = values.get('pm10_atm', {}).get('reading')
-
-            cur.execute("""
-                INSERT INTO hm3301_measurements (time, sensor_id, pm1_0_std, pm2_5_std, pm10_std, pm1_0_atm, pm2_5_atm, pm10_atm)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (timestamp, sensor_id, pm1_0_std, pm2_5_std, pm10_std, pm1_0_atm, pm2_5_atm, pm10_atm))
-
-            conn.commit()
-            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, HM3301: PM1.0={pm1_0_std}/{pm1_0_atm}, PM2.5={pm2_5_std}/{pm2_5_atm}, PM10={pm10_std}/{pm10_atm} µg/m³")
-            cur.close()
-
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"✗ {self.db_type}: Error storing HM3301 data: {e}")
-        finally:
-            self.db_pool.putconn(conn)
 
 
 class FlexibleDatabaseStorage(DatabaseStorage):
@@ -507,16 +388,11 @@ def main():
     logger.info("=" * 50)
     logger.info("ESP32 Sensor Data Collector")
     logger.info("=" * 50)
-    logger.info(f"Columnar DB: {'ENABLED' if ENABLE_COLUMNAR_DB else 'DISABLED'}")
-    logger.info(f"Flexible DB: {'ENABLED' if ENABLE_FLEXIBLE_DB else 'DISABLED'}")
+    logger.info("Using Flexible Database")
     logger.info("=" * 50)
 
-    # Create storage handlers based on configuration
-    storage_handlers = []
-    if ENABLE_COLUMNAR_DB:
-        storage_handlers.append(ColumnarDatabaseStorage(DB_CONFIG_COLUMNAR))
-    if ENABLE_FLEXIBLE_DB:
-        storage_handlers.append(FlexibleDatabaseStorage(DB_CONFIG_FLEXIBLE))
+    # Create storage handler
+    storage_handlers = [FlexibleDatabaseStorage(DB_CONFIG)]
 
     try:
         collector = SensorDataCollector(
