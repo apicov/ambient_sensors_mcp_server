@@ -188,7 +188,9 @@ class FlexibleDatabaseStorage(DatabaseStorage):
                     """, (timestamp, sensor_id, field_name, reading))
 
             conn.commit()
-            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, Sensor: {sensor_type}, Metrics: {list(values.keys())}")
+            # Log metrics with their values
+            metrics_str = ", ".join([f"{k}={v.get('reading')}" for k, v in values.items() if v.get('reading') is not None])
+            logger.info(f"✓ {self.db_type}: TIME: {timestamp}, Sensor: {sensor_type}, Values: {metrics_str}")
             cur.close()
 
         except Exception as e:
