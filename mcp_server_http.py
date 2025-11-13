@@ -164,6 +164,7 @@ def create_plot(query_id: str, plot_code: str) -> dict:
     The DataFrame is available as 'df', pyplot as 'plt' in your code.
     Write plotting code (e.g., plt.plot(df['x'], df['y']), plt.xlabel('X'), plt.title('My Plot')).
     Plot will be automatically saved with a UUID and download link will be returned.
+    Do not add too many ticks on x axis, maximumm 12 unless  unless the user explicitly requests more.
     '''
     result = plotEx.create_plot(query_id, str(files_path), plot_code)
 
